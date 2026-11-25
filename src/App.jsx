@@ -4,7 +4,7 @@ import {
   Clock, Package, ChefHat, Menu, X, ArrowRight, User, Lock, LogOut,
   LayoutDashboard, ShoppingCart, Tag, Store, Receipt, BarChart3, MapPin,
   ChevronRight, AlertTriangle, ExternalLink, Upload, Image as ImageIcon,
-  Link2, Edit3, Eye, Printer, Download, Phone, ShieldCheck
+  Link2, Edit3, Eye, Printer, Download, Phone, ShieldCheck, Copy
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
@@ -22,15 +22,12 @@ const firebaseConfig = {
   appId: "1:457163906285:web:128899458de9f15fab80e4"
 };
 
-const firebaseApp = initializeApp(firebaseConfig);
-const auth = getAuth(firebaseApp);
-const db = getFirestore(firebaseApp);
-const appId = 'roti-emak-penebal';
 // ============================================================================
 // 1. KONFIGURASI PENYIMPANAN PRODUKSI (MODE SIAP HOSTING) & ASET VISUAL
 // ============================================================================
 const STORAGE_KEYS = {
   CART: 'roti_emak_prod_cart_v1',
+  MY_ORDER_IDS: 'roti_emak_my_order_ids_v1',
 };
 
 const DEFAULT_ADMIN_CREDS = {
@@ -716,6 +713,15 @@ export default function App() {
     }
   };
 
+  const loadMyOrderIdsLocal = () => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.MY_ORDER_IDS);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  };
+
   // State Autentikasi & Status Cloud
   const [cloudUser, setCloudUser] = useState(null);
 
@@ -744,6 +750,7 @@ export default function App() {
   const [partnerSales, setPartnerSales] = useState(INITIAL_PARTNER_SALES);
   const [shippingRates, setShippingRates] = useState(INITIAL_SHIPPING);
   const [cart, setCart] = useState(loadCartLocal);
+  const [myOrderIds, setMyOrderIds] = useState(loadMyOrderIdsLocal);
   const [activities, setActivities] = useState(INITIAL_ACTIVITIES);
   const [customQrisImage, setCustomQrisImage] = useState('');
   const [customHeroImage, setCustomHeroImage] = useState(BAKERY_ARTWORKS.BUNDLING_POSTER);
@@ -754,7 +761,7 @@ export default function App() {
     newPassword: '',
     confirmPassword: '',
   });
-  // Simpan keranjang belanja per perangkat pembeli
+  // Simpan keranjang belanja & daftar ID pesanan pribadi di perangkat pembeli
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.CART, JSON.stringify(cart));
@@ -762,6 +769,14 @@ export default function App() {
       // Abaikan jika penuh
     }
   }, [cart]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.MY_ORDER_IDS, JSON.stringify(myOrderIds));
+    } catch {
+      // Abaikan jika penuh
+    }
+  }, [myOrderIds]);
 
   // 1. Autentikasi Cloud Otomatis (Wajib sebelum baca/tulis database)
   useEffect(() => {
@@ -979,7 +994,38 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState('Semua');
   const [detailProduct, setDetailProduct] = useState(null);
   const [detailQty, setDetailQty] = useState(1);
-  const [orderSearchCode, setOrderSearchCode] = useState('');
+  const [trackForm, setTrackForm] = useState({ code: '', phoneLast4: '' });
+  const [trackError, setTrackError] = useState('');
+
+  const handleTrackOrderSubmit = (e) => {
+    e.preventDefault();
+    const code = trackForm.code.trim().toUpperCase();
+    const last4 = trackForm.phoneLast4.replace(/\D/g, '').slice(-4);
+
+    if (!code || last4.length < 4) {
+      setTrackError('Masukkan Kode Pesanan (contoh: RE-2026...) dan 4 digit terakhir No. HP.');
+      return;
+    }
+
+    const found = orders.find((o) => {
+      const orderPhoneDigits = String(o.phone || '').replace(/\D/g, '');
+      return o.id.toUpperCase() === code && orderPhoneDigits.endsWith(last4);
+    });
+
+    if (!found) {
+      setTrackError(
+        'Pesanan tidak ditemukan atau 4 digit terakhir No. HP tidak cocok. Periksa kembali data Anda.'
+      );
+      return;
+    }
+
+    setTrackError('');
+    if (!myOrderIds.includes(found.id)) {
+      setMyOrderIds((prev) => [found.id, ...prev]);
+    }
+    setTrackForm({ code: '', phoneLast4: '' });
+    showToast(`Pesanan #${found.id} berhasil ditemukan dan ditambahkan ke daftar Anda!`);
+  };
 
   const categories = useMemo(() => {
     const base = ['Roti Manis', 'Roti Tawar & Gandum', 'Pastry & Croissant', 'Bolu & Kue', 'Paket Hemat'];
@@ -1105,6 +1151,7 @@ export default function App() {
     };
 
     setOrders((prev) => [finalOrder, ...prev]);
+    setMyOrderIds((prev) => (prev.includes(finalOrder.id) ? prev : [finalOrder.id, ...prev]));
     saveCloudDoc('orders', finalOrder.id, finalOrder);
 
     setProducts((prev) =>
@@ -3488,11 +3535,8 @@ export default function App() {
   const homeShowcaseProducts =
     featuredProducts.length > 0 ? featuredProducts : products.slice(0, 4);
 
-  const displayedCustomerOrders = orders.filter((o) => {
-    const q = orderSearchCode.toLowerCase().trim();
-    if (!q) return true;
-    return o.id.toLowerCase().includes(q) || o.customerName.toLowerCase().includes(q);
-  });
+  // Hanya tampilkan pesanan milik perangkat ini (atau yang sudah diverifikasi lewat Kode + 4 digit No. HP)
+  const myPrivateCustomerOrders = orders.filter((o) => myOrderIds.includes(o.id));
 
   return (
     <div className="min-h-screen bg-[#FAF6F0] text-[#2C1A0E] flex flex-col font-sans selection:bg-[#C87D32] selection:text-white">
@@ -4182,12 +4226,33 @@ export default function App() {
                 </div>
 
                 <div className="bg-[#FAF6F0] p-6 rounded-2xl border border-[#E6D8C8] text-left space-y-3 text-sm">
-                  <div className="flex justify-between items-center pb-3 border-b border-[#E6D8C8]">
+                  <div className="flex flex-wrap justify-between items-center gap-2 pb-3 border-b border-[#E6D8C8]">
                     <span className="text-[#6F4E37]">Kode Pesanan Unik:</span>
-                    <span className="font-mono font-bold text-base text-[#4A2C18] bg-white px-3 py-1 rounded-lg border border-[#E6D8C8]">
-                      {checkoutSuccessOrder.id}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-base text-[#4A2C18] bg-white px-3 py-1 rounded-lg border border-[#E6D8C8]">
+                        {checkoutSuccessOrder.id}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const ok = await copyTextSafely(checkoutSuccessOrder.id);
+                          showToast(
+                            ok
+                              ? `Kode pesanan ${checkoutSuccessOrder.id} berhasil disalin!`
+                              : `Catat kode pesanan: ${checkoutSuccessOrder.id}`,
+                            ok ? 'success' : 'info'
+                          );
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#4A2C18] hover:bg-[#6F4E37] text-white text-xs font-bold"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Salin</span>
+                      </button>
+                    </div>
                   </div>
+                  <p className="text-[11px] text-[#6F4E37] bg-white px-3 py-2 rounded-xl border border-[#E6D8C8]">
+                    🔒 Pesanan ini otomatis tersimpan di <strong>Pesanan Saya</strong> pada HP/perangkat ini. Simpan juga kode di atas bila ingin melacak dari HP lain.
+                  </p>
                   <div className="flex justify-between">
                     <span className="text-[#6F4E37]">Tanggal Pengiriman:</span>
                     <span className="font-bold">{checkoutSuccessOrder.deliveryDate}</span>
@@ -4731,36 +4796,100 @@ export default function App() {
           </div>
         )}
 
-        {/* F. PESANAN SAYA */}
+        {/* F. PESANAN SAYA (PRIVASI TERJAGA PER PERANGKAT + LACAK KODE & 4 DIGIT NO. HP) */}
         {storePage === 'orders' && (
           <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
               <div>
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold mb-2">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Riwayat Pesanan Pribadi &amp; Terlindungi</span>
+                </div>
                 <h1 className="font-serif text-3xl font-bold text-[#2C1A0E]">Pesanan Saya</h1>
                 <p className="text-sm text-[#6F4E37] mt-1">
-                  Pantau status pembuatan dan pengiriman pesanan roti Anda secara langsung.
+                  Hanya menampilkan pesanan yang dibuat dari HP/perangkat ini atau pesanan yang Anda
+                  lacak menggunakan Kode Pesanan &amp; 4 digit terakhir No. HP.
                 </p>
-              </div>
-              <div className="relative w-full sm:w-72">
-                <Search className="w-4 h-4 text-[#6F4E37] absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={orderSearchCode}
-                  onChange={(e) => setOrderSearchCode(e.target.value)}
-                  placeholder="Cari kode pesanan / nama..."
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white border border-[#E6D8C8] text-sm"
-                />
               </div>
             </div>
 
-            {displayedCustomerOrders.length === 0 ? (
-              <div className="bg-white rounded-3xl border border-[#E6D8C8] p-12 text-center">
-                <Receipt className="w-12 h-12 mx-auto text-[#C87D32]/50 mb-3" />
-                <p className="font-bold text-[#2C1A0E]">Pesanan tidak ditemukan.</p>
+            {/* Form Lacak Pesanan dari HP Lain / Pesanan WhatsApp */}
+            <form
+              onSubmit={handleTrackOrderSubmit}
+              className="bg-white rounded-2xl border border-[#E6D8C8] p-5 shadow-2xs space-y-3"
+            >
+              <div className="flex items-center gap-2 text-xs font-bold text-[#4A2C18]">
+                <Search className="w-4 h-4 text-[#C87D32]" />
+                <span>Pesan dari HP lain? Lacak dengan Kode Pesanan &amp; 4 Digit Terakhir No. HP</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                <div className="sm:col-span-5">
+                  <input
+                    type="text"
+                    value={trackForm.code}
+                    onChange={(e) => setTrackForm({ ...trackForm, code: e.target.value })}
+                    placeholder="Kode Pesanan (cth: RE-20261125-482)"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAF6F0] border border-[#E6D8C8] text-sm font-mono uppercase"
+                  />
+                </div>
+                <div className="sm:col-span-4">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={trackForm.phoneLast4}
+                    onChange={(e) =>
+                      setTrackForm({
+                        ...trackForm,
+                        phoneLast4: e.target.value.replace(/\D/g, '').slice(0, 4),
+                      })
+                    }
+                    placeholder="4 digit terakhir No. HP (cth: 7890)"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAF6F0] border border-[#E6D8C8] text-sm"
+                  />
+                </div>
+                <div className="sm:col-span-3">
+                  <button
+                    type="submit"
+                    className="w-full h-full py-2.5 px-4 rounded-xl bg-[#4A2C18] hover:bg-[#6F4E37] text-white text-xs font-bold transition-colors"
+                  >
+                    Tampilkan Pesanan
+                  </button>
+                </div>
+              </div>
+
+              {trackError && (
+                <p className="text-xs font-semibold text-rose-600 flex items-center gap-1.5">
+                  <XCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{trackError}</span>
+                </p>
+              )}
+            </form>
+
+            {myPrivateCustomerOrders.length === 0 ? (
+              <div className="bg-white rounded-3xl border border-[#E6D8C8] p-12 text-center space-y-3">
+                <Receipt className="w-12 h-12 mx-auto text-[#C87D32]/50" />
+                <h2 className="font-serif text-xl font-bold text-[#2C1A0E]">
+                  Belum Ada Riwayat Pesanan di Perangkat Ini
+                </h2>
+                <p className="text-xs sm:text-sm text-[#6F4E37] max-w-md mx-auto leading-relaxed">
+                  Demi menjaga privasi pelanggan, riwayat transaksi pelanggan lain tidak ditampilkan
+                  secara publik. Pesanan baru Anda akan otomatis muncul di sini, atau masukkan{' '}
+                  <strong>Kode Pesanan + 4 digit terakhir No. HP</strong> di kolom atas.
+                </p>
+                <div className="pt-2">
+                  <button
+                    onClick={() => setStorePage('products')}
+                    className="px-6 py-3 rounded-2xl bg-[#4A2C18] hover:bg-[#6F4E37] text-white text-xs font-bold"
+                  >
+                    Mulai Pesan Roti Sekarang
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="space-y-4">
-                {displayedCustomerOrders.map((ord) => (
+                {myPrivateCustomerOrders.map((ord) => (
                   <div
                     key={ord.id}
                     className="bg-white rounded-2xl border border-[#E6D8C8] p-6 shadow-2xs space-y-4"
