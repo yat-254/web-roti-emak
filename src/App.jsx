@@ -21,6 +21,10 @@ const firebaseConfig = {
   messagingSenderId: "457163906285",
   appId: "1:457163906285:web:128899458de9f15fab80e4"
 };
+const firebaseApp = initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const db = getFirestore(firebaseApp);
+const appId = 'roti-emak-penebal';
 
 // ============================================================================
 // 1. KONFIGURASI PENYIMPANAN PRODUKSI (MODE SIAP HOSTING) & ASET VISUAL
